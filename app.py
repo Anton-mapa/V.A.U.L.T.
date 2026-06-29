@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 app = Flask(__name__, static_folder="static")
 
@@ -36,7 +36,7 @@ CATEGORIES = {
 CAT_LOOKUP = {skill: cat for cat, skills in CATEGORIES.items() for skill in skills}
 
 
-# ─── Skills ─────────────────────────────────────────────────────────────
+# ─── Skills ─────────────────────────────────────────────────
 
 def _parse_frontmatter(text):
     if not text.startswith("---"):
@@ -67,15 +67,15 @@ def get_skills():
         desc = fm.get("description", "").strip('"') or f"Run /{name}"
         desc = re.sub(r'\s*\(gstack\)$', '', desc)
         skills.append({
-            "name":        name,
+            "name":     name,
             "description": desc,
-            "category":    CAT_LOOKUP.get(name, "General"),
-            "type":        "command",
+            "category": CAT_LOOKUP.get(name, "General"),
+            "type":     "command",
         })
     return skills
 
 
-# ─── Tasks ─────────────────────────────────────────────────────────────
+# ─── Tasks ─────────────────────────────────────────────────
 
 def load_tasks():
     if not TASKS_FILE.exists():
@@ -93,7 +93,7 @@ def save_tasks(tasks):
     )
 
 
-# ─── Routes ─────────────────────────────────────────────────────────────
+# ─── Routes ─────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -185,6 +185,108 @@ def api_run():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/prompt")
+def api_prompt():
+    text = request.args.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "No text"}), 400
+
+    def generate():
+        yield f"data: {json.dumps({'type': 'start', 'prompt': text})}\n\n"
+        try:
+            proc = subprocess.Popen(
+                ["claude", "-p", text, "--output-format", "text"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=r"C:\Users\Hogar",
+                env={**os.environ},
+            )
+            for line in proc.stdout:
+                yield f"data: {json.dumps({'type': 'output', 'text': line})}\n\n"
+            proc.wait()
+            yield f"data: {json.dumps({'type': 'done', 'code': proc.returncode})}\n\n"
+        except FileNotFoundError:
+            yield f"data: {json.dumps({'type': 'error', 'text': 'claude not found on PATH'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'text': str(e)})}\n\n"
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─── Google Calendar ──────────────────────────────────────────
+
+@app.route("/api/gcal/status")
+def api_gcal_status():
+    try:
+        import gcal
+        return jsonify(gcal.status())
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)})
+
+
+@app.route("/api/gcal/auth")
+def api_gcal_auth():
+    try:
+        import gcal
+        url, err = gcal.get_auth_url()
+        if err:
+            return jsonify({"error": err}), 400
+        return redirect(url)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/gcal/callback")
+def api_gcal_callback():
+    code = request.args.get("code")
+    if not code:
+        return "Missing code", 400
+    try:
+        import gcal
+        ok, err = gcal.handle_callback(code)
+        if not ok:
+            return f"Auth error: {err}", 400
+        return redirect("/?gcal=connected")
+    except Exception as e:
+        return str(e), 500
+
+
+@app.route("/api/gcal/sync", methods=["POST"])
+def api_gcal_sync():
+    try:
+        import gcal
+        events, err = gcal.sync_events()
+        if err:
+            return jsonify({"error": err}), 400
+        tasks = load_tasks()
+        existing_ids = {t.get("gcal_id") for t in tasks if t.get("gcal_id")}
+        added = 0
+        for ev in events:
+            if ev["gcal_id"] not in existing_ids:
+                tasks.append({
+                    "id":         str(uuid.uuid4()),
+                    "title":      ev["title"],
+                    "category":   ev["category"],
+                    "subject":    ev["subject"],
+                    "due_date":   ev["due_date"],
+                    "done":       False,
+                    "created_at": datetime.now().isoformat(),
+                    "gcal_id":    ev["gcal_id"],
+                })
+                added += 1
+        save_tasks(tasks)
+        return jsonify({"added": added, "total_found": len(events)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
