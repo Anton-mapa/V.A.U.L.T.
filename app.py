@@ -7,6 +7,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+# Allow OAuth over HTTP on localhost
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+
 from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 app = Flask(__name__, static_folder="static")
@@ -36,7 +39,7 @@ CATEGORIES = {
 CAT_LOOKUP = {skill: cat for cat, skills in CATEGORIES.items() for skill in skills}
 
 
-# ─── Skills ─────────────────────────────────────────────────
+# ─── Skills ───────────────────────────────────────────────────────────────────────────
 
 def _parse_frontmatter(text):
     if not text.startswith("---"):
@@ -75,7 +78,7 @@ def get_skills():
     return skills
 
 
-# ─── Tasks ─────────────────────────────────────────────────
+# ─── Tasks ───────────────────────────────────────────────────────────────────────────
 
 def load_tasks():
     if not TASKS_FILE.exists():
@@ -93,7 +96,7 @@ def save_tasks(tasks):
     )
 
 
-# ─── Routes ─────────────────────────────────────────────────
+# ─── Routes ───────────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -222,7 +225,7 @@ def api_prompt():
     )
 
 
-# ─── Google Calendar ──────────────────────────────────────────
+# ─── Google Calendar ───────────────────────────────────────────────────────────────────
 
 @app.route("/api/gcal/status")
 def api_gcal_status():
