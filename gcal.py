@@ -1,14 +1,15 @@
 """
 Google Calendar integration for VAULT.
-
-Setup:
-1. Go to https://console.cloud.google.com/
-2. Create a project, enable Google Calendar API
-3. Create OAuth 2.0 credentials (Desktop app)
-4. Download credentials.json into vault-dashboard/
-5. Click "Conectar" in the sidebar — authorize in the browser
-6. Click "Sincronizar" to import matching events as tasks
 """
+# Python 3.14 enforces stricter cert checking that rejects some Google
+# intermediate CAs. truststore injects the Windows certificate store so
+# all HTTPS connections use the OS-trusted roots instead of certifi.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,9 @@ CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
 TOKEN_FILE       = Path(__file__).parent / "gcal_token.json"
 SCOPES           = ["https://www.googleapis.com/auth/calendar.readonly"]
 REDIRECT_URI     = "http://localhost:5000/api/gcal/callback"
+
+# PKCE verifier keyed by OAuth state — survives the browser redirect
+_pkce_store: dict = {}
 
 KEYWORDS = [
     "examen", "parcial", "final", "tp", "trabajo práctico",
@@ -60,11 +64,13 @@ def get_auth_url():
     flow = Flow.from_client_secrets_file(
         str(CREDENTIALS_FILE), scopes=SCOPES, redirect_uri=REDIRECT_URI
     )
-    url, _ = flow.authorization_url(access_type="offline", prompt="consent")
+    url, state = flow.authorization_url(access_type="offline", prompt="consent")
+    if getattr(flow, "code_verifier", None):
+        _pkce_store[state] = flow.code_verifier
     return url, None
 
 
-def handle_callback(code):
+def handle_callback(code, state=None):
     from google_auth_oauthlib.flow import Flow
 
     if not CREDENTIALS_FILE.exists():
@@ -72,7 +78,8 @@ def handle_callback(code):
     flow = Flow.from_client_secrets_file(
         str(CREDENTIALS_FILE), scopes=SCOPES, redirect_uri=REDIRECT_URI
     )
-    flow.fetch_token(code=code)
+    code_verifier = _pkce_store.pop(state, None) if state else None
+    flow.fetch_token(code=code, code_verifier=code_verifier)
     TOKEN_FILE.write_text(flow.credentials.to_json(), encoding="utf-8")
     return True, None
 

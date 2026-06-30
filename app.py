@@ -10,6 +10,14 @@ from pathlib import Path
 # Allow OAuth over HTTP on localhost
 os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
+# Python 3.14 breaks Google's cert chain. truststore uses the Windows cert store.
+# Must be called BEFORE Flask/urllib3 are imported (urllib3 caches ssl.SSLContext).
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 app = Flask(__name__, static_folder="static")
@@ -39,7 +47,7 @@ CATEGORIES = {
 CAT_LOOKUP = {skill: cat for cat, skills in CATEGORIES.items() for skill in skills}
 
 
-# ─── Skills ───────────────────────────────────────────────────────────────────────────
+# ─── Skills ──────────────────────────────────────────────────────────────────────────
 
 def _parse_frontmatter(text):
     if not text.startswith("---"):
@@ -78,7 +86,7 @@ def get_skills():
     return skills
 
 
-# ─── Tasks ───────────────────────────────────────────────────────────────────────────
+# ─── Tasks ──────────────────────────────────────────────────────────────────────────
 
 def load_tasks():
     if not TASKS_FILE.exists():
@@ -96,7 +104,7 @@ def save_tasks(tasks):
     )
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────────────
+# ─── Routes ─────────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -251,11 +259,12 @@ def api_gcal_auth():
 @app.route("/api/gcal/callback")
 def api_gcal_callback():
     code = request.args.get("code")
+    state = request.args.get("state")
     if not code:
         return "Missing code", 400
     try:
         import gcal
-        ok, err = gcal.handle_callback(code)
+        ok, err = gcal.handle_callback(code, state=state)
         if not ok:
             return f"Auth error: {err}", 400
         return redirect("/?gcal=connected")
